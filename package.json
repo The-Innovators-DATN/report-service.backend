@@ -1,0 +1,39 @@
+{
+  "name": "water-report",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node -r dotenv/config app.js dotenv_config_path=.env",
+    "dev": "nodemon -r dotenv/config app.js dotenv_config_path=.env --watch src --watch . --ext js,json",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "node -r dotenv/config app.js dotenv_config_path=.env.production"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.645.0",
+    "async-retry": "^1.3.3",
+    "bullmq": "^5.51.1",
+    "cron-parser": "^5.1.1",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "express-validator": "^7.2.1",
+    "ioredis": "^5.6.1",
+    "moment-timezone": "^0.5.48",
+    "nodemailer": "^6.10.1",
+    "pg": "^8.15.6",
+    "pg-format": "^1.0.4",
+    "piscina": "^4.9.2",
+    "puppeteer": "^24.7.2",
+    "redis": "^4.7.0",
+    "uuid": "^11.1.0",
+    "water-report": "file:",
+    "winston": "^3.17.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
