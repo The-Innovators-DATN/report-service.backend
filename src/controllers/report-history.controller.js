@@ -1,7 +1,7 @@
 const {
   getHistoryWithPagination,
   update,
-} = require("../services/report_history.service");
+} = require("../services/report-history.service");
 const { successResponse, errorResponse } = require("../utils/response.util");
 
 const getReportHistory = async (req, res) => {

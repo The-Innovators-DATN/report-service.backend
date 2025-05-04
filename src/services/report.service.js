@@ -6,7 +6,7 @@ const {
   deleteScheduleReport,
   findScheduleReportByUserId,
 } = require("../models/report.model");
-const { reportGenerationQueue, emailSendingQueue } = require("../queue");
+const { reportGenerationQueue, emailSendingQueue } = require("../services/queue.service");
 const logger = require("../config/logger");
 const moment = require("moment-timezone");
 

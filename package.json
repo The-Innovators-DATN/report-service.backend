@@ -27,7 +27,6 @@
     "pg-format": "^1.0.4",
     "piscina": "^4.9.2",
     "puppeteer": "^24.7.2",
-    "redis": "^4.7.0",
     "uuid": "^11.1.0",
     "water-report": "file:",
     "winston": "^3.17.0",

@@ -1,10 +1,10 @@
 const {
   getReportHistoryValidation,
   validateReportHistory,
-} = require("../validates/report_history.validate");
+} = require("../validates/report-history.validate");
 const {
   getReportHistory,
-} = require("../controllers/report_history.controller");
+} = require("../controllers/report-history.controller");
 
 module.exports = (router, PATH_API) => {
   router.get(

@@ -1,20 +1,20 @@
-const { Queue, Worker, QueueScheduler } = require("bullmq");
-const { client: redisClient } = require("./config/redis");
-const { s3Client, bucket } = require("./config/minio");
+const { Queue, Worker } = require("bullmq");
+const { client: redisClient } = require("../config/redis");
+const { s3Client, bucket } = require("../config/minio");
 const { PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { transporter } = require("./config/mailer");
-const logger = require("./config/logger");
+const { transporter } = require("../config/mailer");
+const logger = require("../config/logger");
 const {
   createReportHistory,
   updateReportHistory,
-} = require("../models/report_history.model");
+} = require("../models/report-history.model");
 const { findScheduleReportById } = require("../models/report.model");
 const Piscina = require("piscina");
 
 // create a thread pool for report generation
 const reportGenerationPool = new Piscina({
-  filename: __dirname + "/../workers/report_generator.worker.js",
-  maxThreads: 5, // limit to 5 concurrent threads
+  filename: __dirname + "/../workers/report-generator.worker.js",
+  maxThreads: 5,
 });
 
 // setup queues for report generation and email sending
@@ -39,23 +39,13 @@ const emailSendingQueue = new Queue("email-sending", {
   },
 });
 
-// enable scheduling for cron-based jobs
-const reportScheduler = new QueueScheduler("report-generation", {
-  connection: redisClient,
-});
-const emailScheduler = new QueueScheduler("email-sending", {
-  connection: redisClient,
-});
-
 // worker for generating reports (PDF) using thread pool
 const reportWorker = new Worker(
   "report-generation",
   async (job) => {
     const { reportId, title, dashboardLayout } = job.data;
     logger.info(
-      `main thread: starting PDF generation for report ${reportId}, attempt ${
-        job.attemptsMade + 1
-      }`
+      `main thread: starting PDF generation for report ${reportId}, attempt ${job.attemptsMade + 1}`
     );
 
     try {
@@ -75,10 +65,16 @@ const reportWorker = new Worker(
       throw err;
     }
   },
-  { connection: redisClient, concurrency: 5 } // matches the thread pool size
+  {
+    connection: redisClient,
+    concurrency: 5,
+    // configure worker to handle stalled jobs
+    maxStalledCount: 3,
+    stalledInterval: 30000, // check every 30 seconds
+  }
 );
 
-// worker for sending emails
+// worker for sending emails (handles cron-based jobs automatically)
 const emailWorker = new Worker(
   "email-sending",
   async (job) => {
@@ -173,7 +169,13 @@ const emailWorker = new Worker(
       throw err;
     }
   },
-  { connection: redisClient, concurrency: 3 }
+  {
+    connection: redisClient,
+    concurrency: 3,
+    // configure worker to handle stalled jobs
+    maxStalledCount: 3,
+    stalledInterval: 30000, // check every 30 seconds
+  }
 );
 
 // helper to convert S3 stream to buffer
@@ -222,6 +224,15 @@ emailWorker.on("failed", (job, err) => {
       `email sending job ${job.id} failed, retrying (${job.attemptsMade}/3): ${err.message}`
     );
   }
+});
+
+// handle stalled jobs
+reportWorker.on("stalled", (jobId) => {
+  logger.warn(`report generation job ${jobId} stalled`);
+});
+
+emailWorker.on("stalled", (jobId) => {
+  logger.warn(`email sending job ${jobId} stalled`);
 });
 
 module.exports = { reportGenerationQueue, emailSendingQueue };

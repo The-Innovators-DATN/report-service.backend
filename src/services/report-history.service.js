@@ -1,6 +1,6 @@
 const {
   getReportHistoryWithPagination,
-} = require("../models/report_history.model");
+} = require("../models/report-history.model");
 const logger = require("../config/logger");
 
 class ValidationError extends Error {
