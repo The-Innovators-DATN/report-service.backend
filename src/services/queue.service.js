@@ -1,7 +1,7 @@
 const { Queue, Worker } = require("bullmq");
 const { client: redisClient } = require("../config/redis");
 const { s3Client, bucket } = require("../config/minio");
-const { PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { GetObjectCommand } = require("@aws-sdk/client-s3");
 const { transporter } = require("../config/mailer");
 const logger = require("../config/logger");
 const {
@@ -9,15 +9,20 @@ const {
   updateReportHistory,
 } = require("../models/report-history.model");
 const { findScheduleReportById } = require("../models/report.model");
+const {
+  findDashboardAttachmentByReportId,
+} = require("../models/attachment.model");
 const Piscina = require("piscina");
+const fs = require("fs").promises; // For reading the HTML template file
+const path = require("path");
 
-// create a thread pool for report generation
+// Create a thread pool for report generation
 const reportGenerationPool = new Piscina({
   filename: __dirname + "/../workers/report-generator.worker.js",
   maxThreads: 5,
 });
 
-// setup queues for report generation and email sending
+// Setup queues for report generation and email sending
 const reportGenerationQueue = new Queue("report-generation", {
   connection: redisClient,
   defaultJobOptions: {
@@ -39,13 +44,15 @@ const emailSendingQueue = new Queue("email-sending", {
   },
 });
 
-// worker for generating reports (PDF) using thread pool
+// Worker for generating reports (PDF) using thread pool
 const reportWorker = new Worker(
   "report-generation",
   async (job) => {
     const { reportId, title, dashboardLayout } = job.data;
     logger.info(
-      `main thread: starting PDF generation for report ${reportId}, attempt ${job.attemptsMade + 1}`
+      `main thread: starting PDF generation for report ${reportId}, attempt ${
+        job.attemptsMade + 1
+      }`
     );
 
     try {
@@ -68,26 +75,36 @@ const reportWorker = new Worker(
   {
     connection: redisClient,
     concurrency: 5,
-    // configure worker to handle stalled jobs
     maxStalledCount: 3,
-    stalledInterval: 30000, // check every 30 seconds
+    stalledInterval: 30000,
   }
 );
 
-// worker for sending emails (handles cron-based jobs automatically)
+// Worker for sending emails (handles cron-based jobs automatically)
 const emailWorker = new Worker(
   "email-sending",
   async (job) => {
-    const { reportId, title, recipients, s3Key, historyUid } = job.data;
+    const { reportId, title, recipients, historyUid } = job.data;
     const attempt = job.attemptsMade + 1;
     logger.info(
       `sending email for report ${reportId} to ${recipients}, attempt ${attempt}`
     );
 
     try {
+      // Fetch report from DB
       const report = await findScheduleReportById(reportId);
       if (!report) {
         throw new Error(`report ${reportId} not found`);
+      }
+
+      // Fetch s3Key from dashboard_attachment
+      const attachments = await findDashboardAttachmentByReportId(reportId);
+      if (!attachments || attachments.length === 0) {
+        throw new Error(`No active attachment found for report ${reportId}`);
+      }
+      const s3Key = attachments[0].s3_key;
+      if (!s3Key) {
+        throw new Error(`No s3Key found in attachment for report ${reportId}`);
       }
 
       const downloadParams = {
@@ -100,10 +117,35 @@ const emailWorker = new Worker(
       );
       const pdfBuffer = await streamToBuffer(Body);
 
+      // Load the HTML template (updated path)
+      const templatePath = path.join(
+        __dirname,
+        "../templates/water-report-email-template.html"
+      );
+      let htmlContent;
+      try {
+        htmlContent = await fs.readFile(templatePath, "utf-8");
+      } catch (templateError) {
+        logger.error(`Failed to read email template: ${templateError.message}`);
+        throw new Error(
+          `Failed to load email template: ${templateError.message}`
+        );
+      }
+
+      // Replace placeholders with dynamic values
+      const recipientName = recipients.split("@")[0]; // Simple extraction, improve as needed
+      const generatedDate = new Date().toLocaleDateString();
+      htmlContent = htmlContent
+        .replace("[Recipient Name]", recipientName)
+        .replace("[Report Title]", title)
+        .replace("[Report ID]", reportId)
+        .replace("[Generated Date]", generatedDate);
+
       const mailOptions = {
         from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USERNAME}>`,
         to: recipients,
         subject: `Water Report: ${title}`,
+        html: htmlContent,
         text: `Attached is your scheduled water report: ${title}`,
         attachments: [
           {
@@ -114,28 +156,38 @@ const emailWorker = new Worker(
         ],
       };
 
+      // Send email
       await transporter.sendMail(mailOptions);
       logger.info(`email sent for report ${reportId} to ${recipients}`);
 
-      if (attempt === 1) {
-        const history = await createReportHistory(
-          reportId,
-          report.user_id,
-          recipients,
-          null,
-          "success",
-          attempt,
-          null,
-          new Date()
+      // Attempt to create/update report history, but don't fail the job if it errors
+      try {
+        if (attempt === 1) {
+          const history = await createReportHistory(
+            reportId,
+            report.user_id,
+            recipients,
+            attachments[0].uid,
+            "success",
+            attempt,
+            null,
+            new Date()
+          );
+          job.data.historyUid = history.uid;
+        } else {
+          await updateReportHistory(historyUid, {
+            status: "success",
+            attempt,
+            sent_at: new Date(),
+          });
+        }
+      } catch (historyError) {
+        logger.error(
+          `failed to record report history for report ${reportId}: ${historyError.message}`
         );
-        job.data.historyUid = history.uid;
-      } else {
-        await updateReportHistory(historyUid, {
-          status: "success",
-          attempt,
-          sent_at: new Date(),
-        });
       }
+
+      return { status: "success" };
     } catch (err) {
       logger.error(
         `failed to send email for report ${reportId} on attempt ${attempt}: ${err.message}`
@@ -145,25 +197,31 @@ const emailWorker = new Worker(
       const user_id = report ? report.user_id : null;
       const status = attempt < 3 ? "retrying" : "failed";
 
-      if (attempt === 1) {
-        const history = await createReportHistory(
-          reportId,
-          user_id,
-          recipients,
-          null,
-          status,
-          attempt,
-          err.message,
-          null
+      try {
+        if (attempt === 1) {
+          const history = await createReportHistory(
+            reportId,
+            user_id,
+            recipients,
+            null,
+            status,
+            attempt,
+            err.message,
+            null
+          );
+          job.data.historyUid = history.uid;
+        } else {
+          await updateReportHistory(historyUid, {
+            status,
+            attempt,
+            error_message: err.message,
+            sent_at: null,
+          });
+        }
+      } catch (historyError) {
+        logger.error(
+          `failed to record failure history for report ${reportId}: ${historyError.message}`
         );
-        job.data.historyUid = history.uid;
-      } else {
-        await updateReportHistory(historyUid, {
-          status,
-          attempt,
-          error_message: err.message,
-          sent_at: null,
-        });
       }
 
       throw err;
@@ -172,13 +230,19 @@ const emailWorker = new Worker(
   {
     connection: redisClient,
     concurrency: 3,
-    // configure worker to handle stalled jobs
     maxStalledCount: 3,
-    stalledInterval: 30000, // check every 30 seconds
+    stalledInterval: 30000,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: {
+        type: "exponential",
+        delay: 1000,
+      },
+    },
   }
 );
 
-// helper to convert S3 stream to buffer
+// Helper to convert S3 stream to buffer
 const streamToBuffer = async (stream) => {
   const chunks = [];
   for await (const chunk of stream) {
@@ -187,7 +251,7 @@ const streamToBuffer = async (stream) => {
   return Buffer.concat(chunks);
 };
 
-// monitor queue lengths and log them every 5 minutes
+// Monitor queue lengths and log them every 5 minutes
 const monitorQueues = async () => {
   const reportQueueStats = await reportGenerationQueue.getJobCounts();
   const emailQueueStats = await emailSendingQueue.getJobCounts();
@@ -201,7 +265,7 @@ const monitorQueues = async () => {
 
 setInterval(monitorQueues, 5 * 60 * 1000);
 
-// handle worker errors
+// Handle worker errors
 reportWorker.on("failed", (job, err) => {
   if (job.attemptsMade >= 3) {
     logger.error(
@@ -226,7 +290,7 @@ emailWorker.on("failed", (job, err) => {
   }
 });
 
-// handle stalled jobs
+// Handle stalled jobs
 reportWorker.on("stalled", (jobId) => {
   logger.warn(`report generation job ${jobId} stalled`);
 });

@@ -1,4 +1,5 @@
 const { pgPool } = require("../config/database");
+const { v4: uuidv4 } = require("uuid");
 
 const createReportHistory = async (
   report_id,
@@ -13,8 +14,14 @@ const createReportHistory = async (
   const client = await pgPool.connect();
   try {
     await client.query("BEGIN");
-    const query = `INSERT INTO report_history (report_id, user_id, recipients, attachment_id, status, attempt, error_message, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`;
+    const query = `
+      INSERT INTO report_history (
+        uid, report_id, user_id, recipients, attachment_id, status, attempt, error_message, sent_at, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+      RETURNING *
+    `;
     const result = await client.query(query, [
+      uuidv4(),
       report_id,
       user_id,
       recipients,
