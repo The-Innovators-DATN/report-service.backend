@@ -6,6 +6,9 @@ const {
   deleteScheduleReport,
   findScheduleReportByUserId,
 } = require("../models/report.model");
+const {
+  findScheduleReportTemplateById,
+} = require("../models/template.model");
 const { reportGenerationQueue, emailSendingQueue } = require("../services/queue.service");
 const logger = require("../config/logger");
 const moment = require("moment-timezone");
@@ -23,7 +26,7 @@ const create = async ({
   timezone,
   pre_gen_offset_min,
   title,
-  recipients,
+  recipients, // Can be array or comma-separated string
   user_id,
   status,
 }) => {
@@ -33,11 +36,12 @@ const create = async ({
       "Missing required fields: template_id, cron_expr, user_id"
     );
   }
-  if (!/^\S+@\S+\.\S+$/.test(recipients)) {
-    logger.error("Invalid email format for recipients");
-    throw new ValidationError("Invalid email format for recipients");
+  if (!validateEmailList(recipients)) {
+    logger.error("Invalid email format for one or more recipients");
+    throw new ValidationError("Invalid email format for one or more recipients");
   }
   const id = uuidv4();
+  const recipientsValue = Array.isArray(recipients) ? recipients.join(',') : recipients;
   const report = await createScheduleReport(
     id,
     template_id,
@@ -45,14 +49,10 @@ const create = async ({
     timezone,
     pre_gen_offset_min,
     title,
-    recipients,
+    recipientsValue,
     user_id,
     status || "active"
   );
-
-  const {
-    findScheduleReportTemplateById,
-  } = require("../models/template.model");
   const template = await findScheduleReportTemplateById(template_id);
   if (!template) {
     logger.error(`template ${template_id} not found for report ${id}`);
@@ -76,9 +76,7 @@ const create = async ({
     }
   );
   logger.info(
-    `scheduled report generation for report ${id} at ${new Date(
-      generationTime
-    )}`
+    `scheduled report generation for report ${id} at ${new Date(generationTime)}`
   );
 
   await emailSendingQueue.add(
@@ -86,9 +84,9 @@ const create = async ({
     {
       reportId: id,
       title,
-      recipients,
+      recipients: recipientsValue, // Pass as comma-separated string
       s3Key: "",
-      historyUid: null, // will be set by the emailWorker on first attempt
+      historyUid: null,
     },
     {
       repeat: {
@@ -133,7 +131,7 @@ const update = async (id, updates) => {
       logger.error(`report ${id} not found for update`);
       throw new ValidationError("Report not found");
     }
-    await emailSendingQueue.removeRepeatable(`send-email-${id}`);
+    await emailSendingQueue.remove(`send-email-${id}`);
     await emailSendingQueue.add(
       `send-email-${id}`,
       {
@@ -163,7 +161,7 @@ const remove = async (id) => {
     throw new ValidationError("ID is required");
   }
   await reportGenerationQueue.remove(`generate-report-${id}`);
-  await emailSendingQueue.removeRepeatable(`send-email-${id}`);
+  await emailSendingQueue.remove(`send-email-${id}`);
   logger.info(`removed scheduled jobs for report ${id}`);
   return await deleteScheduleReport(id);
 };
@@ -175,5 +173,11 @@ const getByUserId = async (user_id) => {
   }
   return await findScheduleReportByUserId(user_id);
 };
+const validateEmailList = (emails) => {
+  const emailArray = Array.isArray(emails) ? emails : emails.split(',').map(email => email.trim());
+  const emailRegex = /^\S+@\S+\.\S+$/;
+  return emailArray.every(email => emailRegex.test(email));
+};
+
 
 module.exports = { create, getById, update, remove, getByUserId };

@@ -6,7 +6,10 @@ const attachmentService = require("../services/attachment.service");
 module.exports = async ({ reportId, title, dashboardLayout }) => {
   console.log(`worker thread: generating PDF for report ${reportId}`);
 
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
   const page = await browser.newPage();
 
   // Construct the dashboard URL using the dashboardLayout UUID
@@ -21,7 +24,7 @@ module.exports = async ({ reportId, title, dashboardLayout }) => {
 
     // Wait for a specific element to ensure content is loaded
     await page
-      .waitForSelector(".highcharts-container", { timeout: 10000 })
+      .waitForSelector(".highcharts-container", { timeout: 20000 })
       .catch(() =>
         console.warn(
           `worker thread: chart container not found for report ${reportId}, proceeding anyway`

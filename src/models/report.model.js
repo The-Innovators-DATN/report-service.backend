@@ -1,4 +1,6 @@
+const { log } = require("winston");
 const { pgPool } = require("../config/database");
+const logger = require("../config/logger");
 
 const createScheduleReport = async (
   id,
@@ -7,13 +9,14 @@ const createScheduleReport = async (
   timezone,
   pre_gen_offset_min,
   title,
-  recipients,
+  recipients, // Now accepts a comma-separated string or array
   user_id,
   status
 ) => {
   const client = await pgPool.connect();
   try {
     await client.query("BEGIN");
+    const recipientsValue = Array.isArray(recipients) ? recipients.join(',') : recipients;
     const query = `INSERT INTO schedule_report (id, template_id, cron_expr, timezone, pre_gen_offset_min, title, recipients, user_id, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`;
     const result = await client.query(query, [
       id || uuidv4(),
@@ -22,13 +25,12 @@ const createScheduleReport = async (
       timezone,
       pre_gen_offset_min,
       title,
-      recipients,
+      recipientsValue,
       user_id,
       status || "active",
     ]);
     await client.query("COMMIT");
     return result.rows[0];
-
   } catch (error) {
     await client.query("ROLLBACK");
     throw new Error(`Failed to create schedule report: ${error.message}`);
@@ -74,9 +76,15 @@ const updateScheduleReport = async (id, updates) => {
 };
 
 const deleteScheduleReport = async (id) => {
-  const query = `UPDATE schedule_report SET status = 'inactive', updated_at = NOW() WHERE id = $1 AND status = 'active' RETURNING *`;
-  const result = await pgPool.query(query, [id]);
-  return result.rows[0] || null;
+  try {
+    logger.info(`Deleting schedule report with ID ${id}`);
+    const query = `UPDATE schedule_report SET status = 'deleted' WHERE id = $1 AND status = 'active' RETURNING *`;
+    const result = await pgPool.query(query, [id]);
+    return result.rows[0] || null;
+  }
+  catch (error) {
+    throw new Error(`Failed to delete schedule report: ${error.message}`);
+  }
 };
 
 const findScheduleReportByUserId = async (user_id) => {

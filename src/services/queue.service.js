@@ -91,13 +91,11 @@ const emailWorker = new Worker(
     );
 
     try {
-      // Fetch report from DB
       const report = await findScheduleReportById(reportId);
       if (!report) {
         throw new Error(`report ${reportId} not found`);
       }
 
-      // Fetch s3Key from dashboard_attachment
       const attachments = await findDashboardAttachmentByReportId(reportId);
       if (!attachments || attachments.length === 0) {
         throw new Error(`No active attachment found for report ${reportId}`);
@@ -117,7 +115,6 @@ const emailWorker = new Worker(
       );
       const pdfBuffer = await streamToBuffer(Body);
 
-      // Load the HTML template (updated path)
       const templatePath = path.join(
         __dirname,
         "../templates/water-report-email-template.html"
@@ -132,8 +129,11 @@ const emailWorker = new Worker(
         );
       }
 
-      // Replace placeholders with dynamic values
-      const recipientName = recipients.split("@")[0]; // Simple extraction, improve as needed
+      // Split recipients into an array if stored as a comma-separated string
+      const recipientList = Array.isArray(recipients)
+        ? recipients
+        : recipients.split(',').map(email => email.trim());
+      const recipientName = recipientList[0].split("@")[0]; // Use first recipient for template
       const generatedDate = new Date().toLocaleDateString();
       htmlContent = htmlContent
         .replace("[Recipient Name]", recipientName)
@@ -143,7 +143,7 @@ const emailWorker = new Worker(
 
       const mailOptions = {
         from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USERNAME}>`,
-        to: recipients,
+        to: recipientList, // Pass the array or comma-separated string
         subject: `Water Report: ${title}`,
         html: htmlContent,
         text: `Attached is your scheduled water report: ${title}`,
@@ -156,17 +156,16 @@ const emailWorker = new Worker(
         ],
       };
 
-      // Send email
       await transporter.sendMail(mailOptions);
-      logger.info(`email sent for report ${reportId} to ${recipients}`);
+      logger.info(`email sent for report ${reportId} to ${recipientList.join(', ')}`);
 
-      // Attempt to create/update report history, but don't fail the job if it errors
+      // Update history logic remains the same
       try {
         if (attempt === 1) {
           const history = await createReportHistory(
             reportId,
             report.user_id,
-            recipients,
+            recipientList.join(','), // Store as comma-separated for history
             attachments[0].uid,
             "success",
             attempt,
@@ -198,11 +197,14 @@ const emailWorker = new Worker(
       const status = attempt < 3 ? "retrying" : "failed";
 
       try {
+        const recipientList = Array.isArray(recipients)
+          ? recipients
+          : recipients.split(',').map(email => email.trim());
         if (attempt === 1) {
           const history = await createReportHistory(
             reportId,
             user_id,
-            recipients,
+            recipientList.join(','),
             null,
             status,
             attempt,

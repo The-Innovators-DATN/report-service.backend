@@ -10,7 +10,13 @@ const createScheduleReportValidation = [
     .optional()
     .withMessage("Pre-gen offset must be an integer"),
   body("title").notEmpty().withMessage("Title is required"),
-  body("recipients").notEmpty().withMessage("Recipients are required"),
+  body("recipients")
+    .custom((value) => {
+      const emailArray = Array.isArray(value) ? value : value.split(',').map(email => email.trim());
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      return emailArray.every(email => emailRegex.test(email));
+    })
+    .withMessage("All recipients must have valid email formats"),
   body("user_id").isInt().withMessage("User ID must be an integer"),
   body("status")
     .optional()

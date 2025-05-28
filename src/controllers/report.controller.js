@@ -4,6 +4,10 @@ const { successResponse, errorResponse } = require("../utils/response.util");
 
 const create = async (req, res) => {
   try {
+    if (!validateEmailList(req.body.recipients)) {
+      logger.error("Invalid email format for one or more recipients");
+      throw new ValidationError("Invalid email format for one or more recipients");
+    }
     const newReport = await reportService.create(req.body);
     logger.info(
       `Created schedule report with ID ${newReport.id} for user ${newReport.user_id}`
@@ -50,7 +54,10 @@ const get = async (req, res) => {
 const update = async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
-
+  if (updates.recipients && !validateEmailList(updates.recipients)) {
+    logger.error("Invalid email format for one or more recipients");
+    throw new ValidationError("Invalid email format for one or more recipients");
+  }
   try {
     const updatedReport = await reportService.update(id, updates);
     if (!updatedReport) {
@@ -76,7 +83,7 @@ const update = async (req, res) => {
 
 const remove = async (req, res) => {
   const { id } = req.params;
-
+  logger.info(`Soft-deleting schedule report with ID ${id}`);
   try {
     const deletedReport = await reportService.remove(id);
     if (!deletedReport) {
@@ -115,6 +122,12 @@ const getByUserId = async (req, res) => {
       error: err.message,
     });
   }
+};
+
+const validateEmailList = (emails) => {
+  const emailArray = Array.isArray(emails) ? emails : emails.split(',').map(email => email.trim());
+  const emailRegex = /^\S+@\S+\.\S+$/;
+  return emailArray.every(email => emailRegex.test(email));
 };
 
 module.exports = {
